@@ -1,0 +1,302 @@
+#include <Stepper.h>
+#include <SoftwareSerial.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+#define STEPS_PER_REVOLUTION 200
+#define MOTOR_PIN_1 8
+#define MOTOR_PIN_2 9
+#define MOTOR_PIN_3 10
+#define MOTOR_PIN_4 11
+#define MOTOR_RPM 70
+
+#define TRIGGER_PIN 7
+#define ECHO_PIN 6
+
+#define SERVO_PIN_1 5
+#define SERVO_PIN_2 3
+#define SERVO_PIN_3 44
+#define SERVO_PIN_4 46
+
+#define SW_SERIAL_RX_PIN 12
+#define SW_SERIAL_TX_PIN 13
+
+#define LCD_ADDRESS 0x27
+#define LCD_COLUMNS 16
+#define LCD_LINES 2
+
+#define RFID_DISTANCE 11.0 /* Minimum distance which is used to consider there is an object present on the belt */
+#define TOLERANCE 1.0
+
+#define ALGERIA_TAG 859059253
+#define PALESTINE_TAG 858862903
+#define BRAZIL_TAG 927283011
+#define EGYPT_TAG 893535539
+
+//Objects creation
+Stepper stepper(STEPS_PER_REVOLUTION, MOTOR_PIN_1, MOTOR_PIN_2, MOTOR_PIN_3, MOTOR_PIN_4);
+
+Servo servo01;
+Servo servo02;
+Servo servo03;
+Servo servo04;
+
+SoftwareSerial mySerial(SW_SERIAL_RX_PIN, SW_SERIAL_TX_PIN);
+LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_LINES);
+
+//global variables
+float distance = 0.0;
+
+bool motorRunning = false;
+bool motorEnable = true;
+
+String serial_data = "";
+
+void setup() {
+  lcd.init();
+  lcd.clear();
+  lcd.backlight();
+
+  Serial.begin(9600);
+  mySerial.begin(9600);
+  mySerial.listen();  //necessary for start listening to this port
+
+  //stepper motor pins
+  pinMode(MOTOR_PIN_1, OUTPUT);
+  pinMode(MOTOR_PIN_2, OUTPUT);
+  pinMode(MOTOR_PIN_3, OUTPUT);
+  pinMode(MOTOR_PIN_4, OUTPUT);
+  digitalWrite(MOTOR_PIN_1, LOW);
+  digitalWrite(MOTOR_PIN_2, LOW);
+  digitalWrite(MOTOR_PIN_3, LOW);
+  digitalWrite(MOTOR_PIN_4, LOW);
+
+  //ultrassound sensor pins
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  digitalWrite(TRIGGER_PIN, LOW);
+
+  stepper.setSpeed(MOTOR_RPM);
+
+  servo01.attach(SERVO_PIN_1);
+  servo02.attach(SERVO_PIN_2);
+  servo03.attach(SERVO_PIN_3);
+  servo04.attach(SERVO_PIN_4);
+
+  servo02.write(180);
+  servo04.write(0);
+}
+
+
+void loop() {
+  unsigned long TAG;
+  checkSerialData();
+  if (is_object_present() && motorEnable) {
+    distance = measure_distance();
+    if (distance < (RFID_DISTANCE - TOLERANCE)) {
+      run_motor_until_distance(RFID_DISTANCE);
+      TAG = read_TAG();
+      print_TAG(TAG);
+      update_screen(TAG);
+      update_servo(TAG);
+    }
+  }
+}
+
+
+bool is_object_present(void) {
+  if (measure_distance() <= RFID_DISTANCE) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+
+float measure_distance(void) {
+  digitalWrite(TRIGGER_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGGER_PIN, LOW);
+  return ((pulseIn(ECHO_PIN, HIGH) / 2) * 0.0343);
+}
+
+
+void run_motor_until_distance(float target_distance) {
+  motorRunning = true; 
+  Serial.println("ON");
+  float actual_distance = measure_distance();
+  stepper.setSpeed(70);
+  while ((actual_distance > 0) && (actual_distance < target_distance) && motorEnable) {
+    stepper.step(STEPS_PER_REVOLUTION / 23);
+    actual_distance = measure_distance();
+    checkSerialData();
+  }
+  motorRunning = false;
+  Serial.println("OFF");
+}
+
+
+unsigned long read_TAG(void) {
+  unsigned long tagValue = 0;
+  for (int i = 0; i <= 30; i++) {
+    while (mySerial.available() > 0) {
+      int incomingByte = mySerial.read();
+
+      if (incomingByte == 2) {
+        // reset the tag value and length variables
+        tagValue = 0;
+      }
+
+      else if (incomingByte == 3) {
+        return tagValue;  //tag read successful
+      }
+      // if the incoming byte is part of a tag
+      else {
+        // shift the tag value and add the incoming byte
+        tagValue = (tagValue << 8) + incomingByte;
+      }
+    }
+    delay(100);
+  }
+ // Serial.println("Timeout reading tag!");
+  return -1;  //error reading tag
+}
+
+
+void update_screen(unsigned long info) {
+  lcd.clear();
+
+  switch (info) {
+    case ALGERIA_TAG:
+      lcd.setCursor(2, 0);
+      lcd.print("This is");
+      lcd.setCursor(2, 1);
+      lcd.print("From Algeria   ");
+      break;
+
+    case PALESTINE_TAG:
+      lcd.setCursor(2, 0);
+      lcd.print("This is");
+      lcd.setCursor(2, 1);
+      lcd.print("From Palestine");
+      break;
+
+    case BRAZIL_TAG:
+      lcd.setCursor(2, 0);
+      lcd.print("This is");
+      lcd.setCursor(2, 1);
+      lcd.print("From Brazil");
+      break;
+
+    case EGYPT_TAG:
+      lcd.setCursor(2, 0);
+      lcd.print("This is");
+      lcd.setCursor(2, 1);
+      lcd.print("From Egypt");
+      break;
+
+    case -1:
+      lcd.setCursor(2, 0);
+      lcd.print("Error reading");
+      break;
+  }
+}
+
+
+void update_servo(unsigned long info) {
+  switch (info) {
+    case ALGERIA_TAG:
+      servo02.write(180);
+      servo01.write(0);
+      run_motor_until_distance(RFID_DISTANCE * 5.4);
+      servo01.write(90);
+      break;
+
+    case PALESTINE_TAG:
+      servo02.write(90);
+      run_motor_until_distance(RFID_DISTANCE * 3);
+      servo02.write(180);
+      break;
+
+    case EGYPT_TAG:
+      servo02.write(180);
+      servo01.write(90);
+      servo03.write(180);
+      run_motor_until_distance(RFID_DISTANCE * 5.4);
+      servo03.write(90);
+      break;
+
+    case BRAZIL_TAG:
+      servo02.write(180);
+      servo01.write(90);
+      servo03.write(90);
+      servo04.write(90);
+      run_motor_until_distance(RFID_DISTANCE * 3);
+      servo04.write(0);
+      break;
+
+    case -1:
+      servo02.write(180);
+      servo01.write(90);
+      servo03.write(90);
+      servo04.write(0);
+      run_motor_until_distance(RFID_DISTANCE * 7.3);
+      break;
+  }
+}
+
+
+void print_TAG(unsigned long info) {
+  switch (info) {
+    case ALGERIA_TAG:
+        Serial.println("Algeria");
+      break;
+
+    case PALESTINE_TAG:
+        Serial.println("Palestine");
+      break;
+
+    case BRAZIL_TAG:
+        Serial.println("Brazil");
+      break;
+
+    case EGYPT_TAG:
+        Serial.println("Egypt");
+      break;
+
+    case -1:
+        Serial.println("TAG Error");
+      break;
+  }
+}
+
+
+void checkSerialData(void){
+  while(Serial.available()){
+    serial_data = Serial.readStringUntil('\n');
+  }
+  if (serial_data == "ENABLE"){
+    motorEnable = true;
+    Serial.println("ENABLE");
+  }
+  else if (serial_data == "DISABLE"){
+    motorEnable = false;
+    Serial.println("DISABLE");
+  }
+  else if (serial_data == "status"){
+    if (motorEnable){
+      Serial.println("ENABLE");
+    }
+    else{
+      Serial.println("DISABLE");
+    }
+    if (motorRunning){
+      Serial.println("ON");
+    }
+    else{
+      Serial.println("OFF");
+    }
+  }
+  
+  serial_data = "";
+}
