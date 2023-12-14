@@ -1,0 +1,316 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include "BluetoothSerial.h"
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+const char* ssid = "Taima";
+const char* password = "taima45@";
+int Ir = 13;
+int BUZZUR = 14;
+int count_value = 0;
+int last_val = 1;
+
+bool motorEnable= false;
+bool new_TAG = false;
+
+WebServer server(80);
+
+BluetoothSerial SerialBT;
+
+String last_TAG = "";
+String serial_data = "";
+String motorRunning = "";
+
+const char* htmlContent = R"(
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        * {
+            background-color: black;
+        }
+        .header-content {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            margin-right: 10rem;
+            margin-left: 10rem;
+        }
+        .header-content h1 {
+            font-weight: 700;
+            font-size: 60px;
+            line-height: 70px;
+            letter-spacing: -0.04em;
+            color: #fff;
+        }
+        .header-content__input {
+            width: 100%;
+            margin: 2rem 0 1rem;
+            display: flex;
+            flex-direction: row;
+        }
+        .header-content__input button {
+            flex: 0.6;
+            width: 50px;
+            min-height: 60px;
+            font-family: var(--font-family);
+            font-weight: 600;
+            font-size: 20px;
+            line-height: 28px;
+            color: #fff;
+            border: 2px solid #FF4820;
+            padding: 0 1rem;
+            margin: 0.5rem 0.5rem 0.5rem 0.5rem;
+        }
+        .bubbles {
+            position: relative;
+            display: flex;
+        }
+        .bubbles span{
+            position: relative;
+            width: 30px;
+            height: 30px;
+            background: #ff2d75;
+            margin: 0 4px;
+            border-radius: 50%;
+            box-shadow: 0 0 0 10px #ff2d7544,
+            0 0 50px #ff2d75,
+            0 0 100px #ff2d75;
+            animation: animate 15s linear infinite;
+            animation-duration: calc(125s / var(--i));
+        }
+        .bubbles span:nth-child(even){
+            background: #FF4820;
+            box-shadow: 0 0 0 10px #FF482044,
+            0 0 50px #FF4820,
+            0 0 100px #FF4820;
+        }
+        @keyframes animate {
+            0% {
+                transform: translateY(100vh) scale(0);
+            }
+            100% {
+                transform: translateY(-10vh) scale(1);
+            }        }
+        @media screen and (max-width: 1050px) {
+            .header {
+                flex-direction: column;
+            }
+            .header-content {
+                margin: 3rem 0 3rem;
+            }
+        }
+    </style>
+    <script>
+        var countValue = 0;
+        function updateCountValue(value) {
+            countValue = value;
+            document.getElementById("packetCount").innerText = countValue;
+        }
+        function updateBeltStatus(value) {
+            document.getElementById("motorStatus").innerText = value;
+        }
+        function updateLastTAG(value){
+          document.getElementById("last_TAG").innerText = value;
+        }
+        function updatePage() {
+            fetch('/getCountValue')
+                .then(response => response.json())
+                .then(data => {
+                    updateCountValue(data.count_value);
+                    updateBeltStatus(data.motorRunning);
+                    updateLastTAG(data.last_tag);
+                });
+        }
+        setInterval(updatePage, 250);
+    </script>
+</head>
+<body>
+    <div class="header section__padding" id="Home">
+        <div class="header-content">
+            <h1>Sorting Master</h1>
+            <div class="bubbles">
+                <span style="--i:11;"></span>
+                <span style="--i:11;"></span>
+                <span style="--i:24;"></span>
+                <span style="--i:10;"></span>
+                <span style="--i:14;"></span>
+                <span style="--i:23;"></span>
+                <span style="--i:18;"></span>
+                <span style="--i:16;"></span>
+                <span style="--i:19;"></span>
+                <span style="--i:20;"></span>
+                <span style="--i:22;"></span>
+                <span style="--i:25;"></span>
+                <span style="--i:18;"></span>
+                <span style="--i:21;"></span>
+                <span style="--i:15;"></span>
+                <span style="--i:13;"></span>
+                <span style="--i:26;"></span>
+                <span style="--i:17;"></span>
+                <span style="--i:13;"></span>
+                <span style="--i:26;"></span>
+            </div>
+            <div class="header-content__input">
+                <button type="button">Number Of Packets</button>
+                <button type="button">Motor Running</button>
+                <button type="button">Last TAG</button>
+            </div>
+            <div class="header-content__input">
+                <button type="button" id="packetCount">packetCount</button>
+                <button type="button" id="motorStatus">status</button>
+                <button type="button" id="last_TAG">lastTag</button>
+            </div>
+           
+        </div>
+    </div>
+</body>
+</html>
+)";
+void setup() {
+    pinMode(Ir, INPUT_PULLUP);
+    pinMode(BUZZUR, OUTPUT);
+    Serial.begin(9600);
+    Serial2.begin(9600, SERIAL_8N1, 16, 17);
+    SerialBT.begin("ESP32test");  // Bluetooth device name
+
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Connecting to WiFi...");
+    }
+    Serial.println("Connected to WiFi");
+    server.on("/", HTTP_GET, [](){
+        server.send(200, "text/html", htmlContent);
+    });
+
+    server.on("/getCountValue", HTTP_GET, [](){
+        String response = "{\"count_value\": " + String(count_value) + "," +
+         " \"motorRunning\": \"" + motorRunning + "\"" + "," +
+         " \"last_tag\": \"" + last_TAG + "\"" + 
+         "}";
+        server.send(200, "application/json", response);
+    });
+
+    server.begin();
+    Serial.println(WiFi.localIP());
+    GetMotorStatus();
+}
+
+void loop() {
+    checkSerialData();
+    server.handleClient();
+
+    int val = digitalRead(Ir);
+  
+    if (val == 0 && last_val == 1) {
+        delay(250);
+        if (digitalRead(Ir) == 0) {
+            count_value++;
+            Serial.print("IR_Count=");
+            Serial.println(count_value);
+            digitalWrite(BUZZUR, HIGH);
+            last_val = 0;
+        }    
+    } else if (val == 1 && last_val == 0) {
+        last_val = 1;
+        Serial.println("no object");
+        digitalWrite(BUZZUR, LOW);
+    }
+    if (SerialBT.hasClient()) {
+      while (SerialBT.available()) {
+        String data = SerialBT.readStringUntil('\n');
+        data.trim();
+
+        if (data == "ENABLE") {
+          SerialBT.println("ENABLE command");
+          Serial2.write("ENABLE");      
+        }
+        else if (data == "DISABLE") {
+          SerialBT.println("DISABLE command");
+          Serial2.write("DISABLE");
+        }
+        else if (data == "packets") {
+          Serial.println("Bluetooth message is 'packets', printing to Serial...");
+          Serial.println("Number of packets: " + String(count_value));
+          SerialBT.println(count_value);
+        } 
+        else if (data == "status") {
+          GetMotorStatus();
+          if(motorEnable){
+            SerialBT.println("Motor movement: ENABLED");
+          }
+          else{
+            SerialBT.println("Motor movement: DISABLED");
+          }
+          SerialBT.println("Motor running: " + motorRunning);
+        }
+        else {
+          Serial.println("Received: " + data);
+        }
+      }
+      if (new_TAG){
+        SerialBT.println(last_TAG);
+        new_TAG = false;
+      }
+    }
+}
+
+
+void checkSerialData(void){
+  serial_data = "";
+  while(Serial2.available()){
+    serial_data = Serial2.readStringUntil('\n');
+  }
+  Serial.println(serial_data);
+    serial_data.trim();
+  
+  if (serial_data == "ON"){
+    motorRunning = "ON";
+  }
+  else if (serial_data == "OFF"){
+    motorRunning = "OFF";
+  }
+  if (serial_data == "ENABLE"){
+    motorEnable = true;
+  }
+  else if (serial_data == "DISABLE"){
+    motorEnable = false;
+  }
+  else if (serial_data == "Algeria"){
+    last_TAG = "Algeria";
+    new_TAG = true;
+  }
+  else if (serial_data == "Palestine"){
+    last_TAG = "Palestine";
+    new_TAG = true;
+  }
+  else if (serial_data == "Brazil"){
+    last_TAG = "Brazil";
+    new_TAG = true;
+  }
+  else if (serial_data == "Egypt"){
+    last_TAG = "Egypt";
+    new_TAG = true;
+  }
+  else if (serial_data == "TAG Error"){
+    last_TAG = "TAG Error";
+    new_TAG = true;
+  }
+}
+
+
+void GetMotorStatus(void){
+  Serial2.println("status");
+  delay(100);
+  checkSerialData();
+}
